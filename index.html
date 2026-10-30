@@ -242,7 +242,7 @@ button { cursor: pointer; }
 
   <main class="list" id="list" aria-live="polite"></main>
 
-  <p class="mode" id="mode">Loading your clients…</p>
+  <p class="mode" id="mode">Connecting to cloud database…</p>
 </div>
 
 <div class="sheet" id="sheet" hidden>
@@ -311,13 +311,26 @@ button { cursor: pointer; }
 
 <div class="toast" id="toast" role="status" hidden></div>
 
-<script>
-(function () {
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+  import { getFirestore, collection, setDoc, doc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+  var firebaseConfig = {
+    apiKey: "AIzaSyD7_TNlBkBiqdY0vQ4lOnWkGR139JYFTmk",
+    authDomain: "garyislanwide.firebaseapp.com",
+    projectId: "garyislanwide",
+    storageBucket: "garyislanwide.firebasestorage.app",
+    messagingSenderId: "1087352717004",
+    appId: "1:1087352717004:web:5162032bcb1b507bc58c69"
+  };
+
   var $ = function (s) { return document.querySelector(s); };
   var LS_KEY = "garyislandwide.clients.v1";
 
   var clients = [];
-  var mode = "device"; // device storage persistence
+  var db = null;
+  var colRef = null;
+  var useCloud = false;
   var filter = "all";
   var query = "";
   var editingId = null;
@@ -356,7 +369,6 @@ button { cursor: pointer; }
     return "$" + n.toLocaleString(undefined, { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
   }
   function newId() { return "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-
   function cleanPhone(p) { return (p || "").replace(/[^+\d]/g, ""); }
 
   function getSmsQuoteUrl(c) {
@@ -364,20 +376,17 @@ button { cursor: pointer; }
     var text = "Hi " + (c.name || "there") + ", this is Gary from Garyislandwide AC Services. Just following up regarding your quote for " + (c.job || "your AC service") + ". Let me know when you are ready to proceed!";
     return "sms:" + num + "?body=" + encodeURIComponent(text);
   }
-
   function getWaQuoteUrl(c) {
     var num = cleanPhone(c.phone);
     var text = "Hi " + (c.name || "there") + ", this is Gary from Garyislandwide AC Services. Just following up regarding your quote for " + (c.job || "your AC service") + ". Let me know when you are ready to proceed!";
     return "https://wa.me/" + num + "?text=" + encodeURIComponent(text);
   }
-
   function getSmsApptUrl(c) {
     var num = cleanPhone(c.phone);
     var dateTxt = c.appointmentDate ? niceDate(c.appointmentDate) : "our scheduled date";
     var text = "Hi " + (c.name || "there") + ", this is Gary from Garyislandwide AC Services. Confirming our appointment for " + (c.job || "your AC service") + " on " + dateTxt + ". See you then!";
     return "sms:" + num + "?body=" + encodeURIComponent(text);
   }
-
   function getWaApptUrl(c) {
     var num = cleanPhone(c.phone);
     var dateTxt = c.appointmentDate ? niceDate(c.appointmentDate) : "our scheduled date";
@@ -386,7 +395,6 @@ button { cursor: pointer; }
   }
 
   function quoteDue(c) { return !!c.reminder && !c.quoteSent; }
-
   function remInfo(c) {
     var d = daysFromToday(c.reminder);
     if (d < 0) return { cls: "late", tag: Math.abs(d) === 1 ? "1 day late" : Math.abs(d) + " days late", text: "Quote was due " + niceDate(c.reminder) };
@@ -395,24 +403,52 @@ button { cursor: pointer; }
     return { cls: "later", tag: "", text: "Give quote " + niceDate(c.reminder) };
   }
 
-  /* ---------- Storage ---------- */
-  function lsLoad() {
-    try { var v = JSON.parse(localStorage.getItem(LS_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+  function saveRecord(c) {
+    if (useCloud && db) {
+      var data = Object.assign({}, c); delete data.id;
+      setDoc(doc(db, "garyislandwide_clients", c.id), data).catch(function(err){ console.error(err); });
+    } else {
+      var i = clients.findIndex(function (x) { return x.id === c.id; });
+      if (i >= 0) clients[i] = c; else clients.push(c);
+      try { localStorage.setItem(LS_KEY, JSON.stringify(clients)); } catch(e){}
+      render();
+    }
   }
-  function lsSave() { try { localStorage.setItem(LS_KEY, JSON.stringify(clients)); } catch (e) {} }
 
-  function upsert(c) {
-    var i = clients.findIndex(function (x) { return x.id === c.id; });
-    if (i >= 0) clients[i] = c; else clients.push(c);
-    render();
-    lsSave();
-  }
-  function removeStored(id) {
-    lsSave();
+  function deleteRecord(id) {
+    if (useCloud && db) {
+      deleteDoc(doc(db, "garyislandwide_clients", id)).catch(function(err){ console.error(err); });
+    } else {
+      clients = clients.filter(function (x) { return x.id !== id; });
+      try { localStorage.setItem(LS_KEY, JSON.stringify(clients)); } catch(e){}
+      render();
+    }
   }
 
   function init() {
-    clients = lsLoad();
+    if (firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY") {
+      try {
+        var app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        useCloud = true;
+        onSnapshot(collection(db, "garyislandwide_clients"), function (snap) {
+          clients = snap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
+          render();
+        }, function (err) {
+          console.error(err);
+          fallbackLocal();
+        });
+        return;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    fallbackLocal();
+  }
+
+  function fallbackLocal() {
+    useCloud = false;
+    try { clients = JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch (e) { clients = []; }
     render();
   }
 
@@ -446,191 +482,4 @@ button { cursor: pointer; }
   function renderStats() {
     var owed = clients.reduce(function (s, c) { return s + (c.paid ? 0 : Number(c.amount) || 0); }, 0);
     $("#st-owed").textContent = money(owed);
-    $("#st-start").textContent = clients.filter(function (c) { return !c.started; }).length;
-    $("#st-quote").textContent = clients.filter(quoteDue).length;
-  }
-
-  function renderReminders() {
-    var due = sorted(clients.filter(quoteDue)).filter(function (c) { return daysFromToday(c.reminder) <= 3; });
-    var box = $("#reminders");
-    var ul = $("#rem-list");
-    ul.textContent = "";
-    box.hidden = due.length === 0;
-    due.forEach(function (c) {
-      var info = remInfo(c);
-      ul.append(h("li", null,
-        h("span", { class: "who", text: c.name + (c.job ? " · " + c.job : "") }),
-        h("div", { class: "actions-sm" },
-          c.phone && h("a", { class: "btn sm", href: getSmsQuoteUrl(c), text: "💬 SMS Quote" }),
-          c.phone && h("a", { class: "btn sm", href: getWaQuoteUrl(c), text: "🟢 WhatsApp" }),
-          h("span", { class: "tag " + info.cls, text: info.tag })
-        )
-      ));
-    });
-  }
-
-  function renderChips() {
-    var wrap = $("#chips");
-    wrap.textContent = "";
-    FILTERS.forEach(function (f) {
-      var n = clients.filter(f.test).length;
-      wrap.append(h("button", {
-        type: "button", class: "chip", "aria-pressed": filter === f.id ? "true" : "false",
-        onclick: function () { filter = f.id; render(); }
-      }, f.label, h("span", { class: "n", text: String(n) })));
-    });
-  }
-
-  function toggle(c, key) {
-    var next = Object.assign({}, c);
-    next[key] = !c[key];
-    next.updatedAt = Date.now();
-    upsert(next);
-  }
-
-  function card(c) {
-    var info = quoteDue(c) ? remInfo(c) : null;
-    var phoneDigits = cleanPhone(c.phone);
-    var amtClass = "amt" + (c.paid ? " paid" : "") + (c.amount ? "" : " none");
-    var delArmed = armedDelete === c.id;
-    return h("article", { class: "card" },
-      h("div", { class: "row1" },
-        h("h3", { class: "name", text: c.name }),
-        h("div", { class: amtClass, text: c.amount ? money(c.amount) + (c.paid ? " paid" : " due") : "No amount yet" })
-      ),
-      h("p", { class: "meta" },
-        c.job && h("span", { class: "job", text: c.job }),
-        c.appointmentDate && h("span", { class: "appt-tag", text: "📅 Appt/Install: " + niceDate(c.appointmentDate) }),
-        c.phone && h("span", null, h("a", { href: "tel:" + phoneDigits, text: c.phone })),
-        c.address && h("span", null, c.address + " ", h("a", { href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(c.address), target: "_blank", rel: "noopener", text: "Map" }))
-      ),
-      info && h("p", { class: "rem " + info.cls, text: info.text }),
-      c.notes && h("p", { class: "notes", text: c.notes }),
-      h("div", { class: "toggles" },
-        h("button", { type: "button", class: "tog", "aria-pressed": c.quoteSent ? "true" : "false", onclick: function () { toggle(c, "quoteSent"); } }, c.quoteSent ? "Quote sent" : "Quote not sent"),
-        h("button", { type: "button", class: "tog", "aria-pressed": c.started ? "true" : "false", onclick: function () { toggle(c, "started"); } }, c.started ? "Job started" : "Not started"),
-        h("button", { type: "button", class: "tog pay" + (c.started && !c.paid ? " hot" : ""), "aria-pressed": c.paid ? "true" : "false", onclick: function () { toggle(c, "paid"); } }, c.paid ? "Paid" : "Unpaid")
-      ),
-      c.phone && h("div", { class: "quick-msg" },
-        h("a", { class: "quick-btn sms", href: getSmsQuoteUrl(c) }, "💬 SMS Quote Reminder"),
-        h("a", { class: "quick-btn wa", href: getWaQuoteUrl(c) }, "🟢 WhatsApp Quote"),
-        c.appointmentDate && h("a", { class: "quick-btn sms", href: getSmsApptUrl(c) }, "📅 SMS Appt Reminder"),
-        c.appointmentDate && h("a", { class: "quick-btn wa", href: getWaApptUrl(c) }, "🟢 WhatsApp Appt")
-      ),
-      h("div", { class: "actions" },
-        h("button", { type: "button", class: "link", onclick: function () { openSheet(c); } }, "Edit"),
-        h("button", { type: "button", class: "link danger", onclick: function () {
-          if (armedDelete === c.id) {
-            armedDelete = null;
-            clients = clients.filter(function (x) { return x.id !== c.id; });
-            render();
-            lsSave();
-          } else {
-            armedDelete = c.id;
-            render();
-            setTimeout(function () { if (armedDelete === c.id) { armedDelete = null; render(); } }, 4000);
-          }
-        } }, delArmed ? "Tap again to delete" : "Delete")
-      )
-    );
-  }
-
-  function exampleCard() {
-    return h("article", { class: "card example", "aria-hidden": "true" },
-      h("span", { class: "flag", text: "Example" }),
-      h("div", { class: "row1" },
-        h("h3", { class: "name", text: "Mrs. Campbell" }),
-        h("div", { class: "amt", text: "$38,000 due" })
-      ),
-      h("p", { class: "meta" },
-        h("span", { class: "job", text: "Consultation" }),
-        h("span", { class: "appt-tag", text: "📅 Appt/Install: Mon, Nov 2" }),
-        h("span", { text: "876-555-0123" }),
-        h("span", { text: "12 Palm Avenue, Portmore" })
-      ),
-      h("p", { class: "rem soon", text: "Give quote Mon, Nov 2" }),
-      h("div", { class: "toggles" },
-        h("span", { class: "tog", "aria-pressed": "false" }, "Quote not sent"),
-        h("span", { class: "tog", "aria-pressed": "false" }, "Not started"),
-        h("span", { class: "tog pay", "aria-pressed": "false" }, "Unpaid")
-      )
-    );
-  }
-
-  function renderList() {
-    var list = $("#list");
-    list.textContent = "";
-    var f = FILTERS.filter(function (x) { return x.id === filter; })[0];
-    var shown = sorted(clients.filter(f.test).filter(matches));
-    if (!clients.length) {
-      list.append(h("section", { class: "empty" },
-        h("h2", { text: "No clients yet" }),
-        h("p", { text: "Add a client to keep their phone, address, amount, quote reminder and job status in one place. Tap Quote sent, Started or Paid on each card as the job moves along." }),
-        h("div", null, h("button", { type: "button", class: "btn primary", onclick: function () { openSheet(null); } }, "Add your first client"))
-      ));
-      list.append(exampleCard());
-      return;
-    }
-    if (!shown.length) {
-      list.append(h("section", { class: "empty" },
-        h("h2", { text: "Nothing matches" }),
-        h("p", { text: "Try a different filter or clear the search box." })
-      ));
-      return;
-    }
-    shown.forEach(function (c) { list.append(card(c)); });
-  }
-
-  function renderMode() {
-    var m = $("#mode");
-    m.textContent = "Saved permanently on this phone's browser storage.";
-  }
-
-  function render() {
-    renderStats();
-    renderReminders();
-    renderChips();
-    renderList();
-    renderMode();
-  }
-
-  /* ---------- Add / edit sheet ---------- */
-  function openSheet(c) {
-    editingId = c ? c.id : null;
-    $("#sheet-h").textContent = c ? "Edit client" : "Add client";
-    $("#f-name").value = c ? c.name || "" : "";
-    $("#f-phone").value = c ? c.phone || "" : "";
-    $("#f-job").value = c ? c.job || "" : "";
-    $("#f-address").value = c ? c.address || "" : "";
-    $("#f-amount").value = c && c.amount ? c.amount : "";
-    $("#f-appointment").value = c ? c.appointmentDate || "" : "";
-    $("#f-reminder").value = c ? c.reminder || "" : "";
-    $("#f-quote").checked = !!(c && c.quoteSent);
-    $("#f-started").checked = !!(c && c.started);
-    $("#f-paid").checked = !!(c && c.paid);
-    $("#f-notes").value = c ? c.notes || "" : "";
-    $("#f-err").hidden = true;
-    $("#sheet").hidden = false;
-    setTimeout(function () { $("#f-name").focus(); }, 30);
-  }
-  function closeSheet() { $("#sheet").hidden = true; editingId = null; }
-
-  $("#add").addEventListener("click", function () { openSheet(null); });
-  $("#cancel").addEventListener("click", closeSheet);
-  $("#backdrop").addEventListener("click", closeSheet);
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
-
-  $("#form").addEventListener("submit", function (e) {
-    e.preventDefault();
-    var name = $("#f-name").value.trim();
-    if (!name) { $("#f-err").hidden = false; $("#f-name").focus(); return; }
-    var prev = editingId ? clients.find(function (x) { return x.id === editingId; }) : null;
-    var amount = parseFloat($("#f-amount").value);
-    var c = Object.assign({}, prev || { createdAt: Date.now() }, {
-      id: prev ? prev.id : newId(),
-      name: name,
-      phone: $("#f-phone").value.trim(),
-      job: $("#f-job").value.trim(),
-      address: $("#f-address").value.trim(),
-      amount: isFinite(amount) && amount > 0 ? amount : 0,
-      appointmentDate: $("#f
+    $("#st-start").textContent = clients.filter(function (
