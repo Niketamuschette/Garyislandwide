@@ -261,7 +261,7 @@ button { cursor: pointer; }
       </div>
       <div class="field">
         <label for="f-job">Type of job</label>
-        <input id="f-job" type="text" list="jobs" autocomplete="off" placeholder="Install, repair, service, consultation">
+        <input id="f-job" type="text" list="jobs" autocomplete="off" placeholder="Consultation, install, repair">
         <datalist id="jobs">
           <option value="Consultation"></option>
           <option value="New install"></option>
@@ -317,9 +317,7 @@ button { cursor: pointer; }
   var LS_KEY = "garyislandwide.clients.v1";
 
   var clients = [];
-  var mode = "loading"; // loading | account | device
-  var col = null;
-  var chain = Promise.resolve();
+  var mode = "device"; // device storage persistence
   var filter = "all";
   var query = "";
   var editingId = null;
@@ -403,62 +401,19 @@ button { cursor: pointer; }
   }
   function lsSave() { try { localStorage.setItem(LS_KEY, JSON.stringify(clients)); } catch (e) {} }
 
-  function toast(msg) {
-    var t = $("#toast");
-    t.textContent = msg;
-    t.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.hidden = true; }, 3800);
-  }
-  function failMsg(e) {
-    if (e && e.code === "invalid_argument") return "Could not save. This link may be view only. Ask for edit access.";
-    return "Could not save that change. Check your connection and try again.";
-  }
-
-  function persist(c) {
-    if (mode === "account" && col) {
-      var data = Object.assign({}, c); delete data.id;
-      chain = chain.then(function () { return col.doc(c.id).set(data); }).catch(function (e) { toast(failMsg(e)); });
-    } else { lsSave(); }
-  }
-  function removeStored(id) {
-    if (mode === "account" && col) {
-      chain = chain.then(function () { return col.doc(id).delete(); }).catch(function (e) { toast(failMsg(e)); });
-    } else { lsSave(); }
-  }
   function upsert(c) {
     var i = clients.findIndex(function (x) { return x.id === c.id; });
     if (i >= 0) clients[i] = c; else clients.push(c);
     render();
-    persist(c);
+    lsSave();
+  }
+  function removeStored(id) {
+    lsSave();
   }
 
-  function useDevice() {
-    mode = "device";
-    col = null;
+  function init() {
     clients = lsLoad();
     render();
-  }
-
-  async function init() {
-    render();
-    var db = null, uid = null;
-    try {
-      if (window.claude && window.claude.use) {
-        var parts = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
-        db = parts[0];
-        uid = parts[1] ? await parts[1].id() : null;
-      }
-    } catch (e) { db = null; }
-    if (!db || !uid) { useDevice(); return; }
-    try {
-      col = db.collection("data/users/" + uid);
-      mode = "account";
-      col.onSnapshot(function (snap) {
-        clients = snap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
-        render();
-      }, function () { useDevice(); });
-    } catch (e) { useDevice(); }
   }
 
   /* ---------- Rendering ---------- */
@@ -569,7 +524,7 @@ button { cursor: pointer; }
             armedDelete = null;
             clients = clients.filter(function (x) { return x.id !== c.id; });
             render();
-            removeStored(c.id);
+            lsSave();
           } else {
             armedDelete = c.id;
             render();
@@ -605,7 +560,6 @@ button { cursor: pointer; }
   function renderList() {
     var list = $("#list");
     list.textContent = "";
-    if (mode === "loading") return;
     var f = FILTERS.filter(function (x) { return x.id === filter; })[0];
     var shown = sorted(clients.filter(f.test).filter(matches));
     if (!clients.length) {
@@ -629,9 +583,7 @@ button { cursor: pointer; }
 
   function renderMode() {
     var m = $("#mode");
-    if (mode === "account") m.textContent = "Saved to your account. Only you can see these clients.";
-    else if (mode === "device") m.textContent = "Saved on this phone or browser only. Clearing site data will erase it.";
-    else m.textContent = "Loading your clients…";
+    m.textContent = "Saved permanently on this phone's browser storage.";
   }
 
   function render() {
@@ -681,23 +633,4 @@ button { cursor: pointer; }
       job: $("#f-job").value.trim(),
       address: $("#f-address").value.trim(),
       amount: isFinite(amount) && amount > 0 ? amount : 0,
-      appointmentDate: $("#f-appointment").value || "",
-      reminder: $("#f-reminder").value || "",
-      quoteSent: $("#f-quote").checked,
-      started: $("#f-started").checked,
-      paid: $("#f-paid").checked,
-      notes: $("#f-notes").value.trim(),
-      updatedAt: Date.now()
-    });
-    upsert(c);
-    closeSheet();
-  });
-
-  $("#search").addEventListener("input", function (e) { query = e.target.value.trim(); renderList(); });
-
-  init();
-})();
-</script>
-
-</body>
-</html>
+      appointmentDate: $("#f
