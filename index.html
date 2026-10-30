@@ -482,4 +482,211 @@ button { cursor: pointer; }
   function renderStats() {
     var owed = clients.reduce(function (s, c) { return s + (c.paid ? 0 : Number(c.amount) || 0); }, 0);
     $("#st-owed").textContent = money(owed);
-    $("#st-start").textContent = clients.filter(function (
+    $("#st-start").textContent = clients.filter(function (c) { return !c.started; }).length;
+    $("#st-quote").textContent = clients.filter(quoteDue).length;
+  }
+
+  function renderReminders() {
+    var due = sorted(clients.filter(quoteDue)).filter(function (c) { return daysFromToday(c.reminder) <= 3; });
+    var box = $("#reminders");
+    var ul = $("#rem-list");
+    ul.textContent = "";
+    box.hidden = due.length === 0;
+    due.forEach(function (c) {
+      var info = remInfo(c);
+      ul.append(h("li", null,
+        h("span", { class: "who", text: c.name + (c.job ? " · " + c.job : "") }),
+        h("div", { class: "actions-sm" },
+          c.phone && h("a", { class: "btn sm", href: getSmsQuoteUrl(c), text: "💬 SMS Quote" }),
+          c.phone && h("a", { class: "btn sm", href: getWaQuoteUrl(c), text: "🟢 WhatsApp" }),
+          h("span", { class: "tag " + info.cls, text: info.tag })
+        )
+      ));
+    });
+  }
+
+  function renderChips() {
+    var wrap = $("#chips");
+    wrap.textContent = "";
+    FILTERS.forEach(function (f) {
+      var n = clients.filter(f.test).length;
+      wrap.append(h("button", {
+        type: "button", class: "chip", "aria-pressed": filter === f.id ? "true" : "false",
+        onclick: function () { filter = f.id; render(); }
+      }, f.label, h("span", { class: "n", text: String(n) })));
+    });
+  }
+
+  function toggle(c, key) {
+    var next = Object.assign({}, c);
+    next[key] = !c[key];
+    next.updatedAt = Date.now();
+    saveRecord(next);
+  }
+
+  function card(c) {
+    var info = quoteDue(c) ? remInfo(c) : null;
+    var phoneDigits = cleanPhone(c.phone);
+    var amtClass = "amt" + (c.paid ? " paid" : "") + (c.amount ? "" : " none");
+    var delArmed = armedDelete === c.id;
+    return h("article", { class: "card" },
+      h("div", { class: "row1" },
+        h("h3", { class: "name", text: c.name }),
+        h("div", { class: amtClass, text: c.amount ? money(c.amount) + (c.paid ? " paid" : " due") : "No amount yet" })
+      ),
+      h("p", { class: "meta" },
+        c.job && h("span", { class: "job", text: c.job }),
+        c.appointmentDate && h("span", { class: "appt-tag", text: "📅 Appt/Install: " + niceDate(c.appointmentDate) }),
+        c.phone && h("span", null, h("a", { href: "tel:" + phoneDigits, text: c.phone })),
+        c.address && h("span", null, c.address + " ", h("a", { href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(c.address), target: "_blank", rel: "noopener", text: "Map" }))
+      ),
+      info && h("p", { class: "rem " + info.cls, text: info.text }),
+      c.notes && h("p", { class: "notes", text: c.notes }),
+      h("div", { class: "toggles" },
+        h("button", { type: "button", class: "tog", "aria-pressed": c.quoteSent ? "true" : "false", onclick: function () { toggle(c, "quoteSent"); } }, c.quoteSent ? "Quote sent" : "Quote not sent"),
+        h("button", { type: "button", class: "tog", "aria-pressed": c.started ? "true" : "false", onclick: function () { toggle(c, "started"); } }, c.started ? "Job started" : "Not started"),
+        h("button", { type: "button", class: "tog pay" + (c.started && !c.paid ? " hot" : ""), "aria-pressed": c.paid ? "true" : "false", onclick: function () { toggle(c, "paid"); } }, c.paid ? "Paid" : "Unpaid")
+      ),
+      c.phone && h("div", { class: "quick-msg" },
+        h("a", { class: "quick-btn sms", href: getSmsQuoteUrl(c) }, "💬 SMS Quote Reminder"),
+        h("a", { class: "quick-btn wa", href: getWaQuoteUrl(c) }, "🟢 WhatsApp Quote"),
+        c.appointmentDate && h("a", { class: "quick-btn sms", href: getSmsApptUrl(c) }, "📅 SMS Appt Reminder"),
+        c.appointmentDate && h("a", { class: "quick-btn wa", href: getWaApptUrl(c) }, "🟢 WhatsApp Appt")
+      ),
+      h("div", { class: "actions" },
+        h("button", { type: "button", class: "link", onclick: function () { openSheet(c); } }, "Edit"),
+        h("button", { type: "button", class: "link danger", onclick: function () {
+          if (armedDelete === c.id) {
+            armedDelete = null;
+            deleteRecord(c.id);
+          } else {
+            armedDelete = c.id;
+            render();
+            setTimeout(function () { if (armedDelete === c.id) { armedDelete = null; render(); } }, 4000);
+          }
+        } }, delArmed ? "Tap again to delete" : "Delete")
+      )
+    );
+  }
+
+  function exampleCard() {
+    return h("article", { class: "card example", "aria-hidden": "true" },
+      h("span", { class: "flag", text: "Example" }),
+      h("div", { class: "row1" },
+        h("h3", { class: "name", text: "Mrs. Campbell" }),
+        h("div", { class: "amt", text: "$38,000 due" })
+      ),
+      h("p", { class: "meta" },
+        h("span", { class: "job", text: "Consultation" }),
+        h("span", { class: "appt-tag", text: "📅 Appt/Install: Mon, Nov 2" }),
+        h("span", { text: "876-555-0123" }),
+        h("span", { text: "12 Palm Avenue, Portmore" })
+      ),
+      h("p", { class: "rem soon", text: "Give quote Mon, Nov 2" }),
+      h("div", { class: "toggles" },
+        h("span", { class: "tog", "aria-pressed": "false" }, "Quote not sent"),
+        h("span", { class: "tog", "aria-pressed": "false" }, "Not started"),
+        h("span", { class: "tog pay", "aria-pressed": "false" }, "Unpaid")
+      )
+    );
+  }
+
+  function renderList() {
+    var list = $("#list");
+    list.textContent = "";
+    var f = FILTERS.filter(function (x) { return x.id === filter; })[0];
+    var shown = sorted(clients.filter(f.test).filter(matches));
+    if (!clients.length) {
+      list.append(h("section", { class: "empty" },
+        h("h2", { text: "No clients yet" }),
+        h("p", { text: "Add a client to keep their phone, address, amount, quote reminder and job status in one place." }),
+        h("div", null, h("button", { type: "button", class: "btn primary", onclick: function () { openSheet(null); } }, "Add your first client"))
+      ));
+      list.append(exampleCard());
+      return;
+    }
+    if (!shown.length) {
+      list.append(h("section", { class: "empty" },
+        h("h2", { text: "Nothing matches" }),
+        h("p", { text: "Try a different filter or clear the search box." })
+      ));
+      return;
+    }
+    shown.forEach(function (c) { list.append(card(c)); });
+  }
+
+  function renderMode() {
+    var m = $("#mode");
+    m.textContent = useCloud ? "☁️ Connected to Cloud Database (Syncs across all devices)." : "📱 Saved on device storage.";
+  }
+
+  function render() {
+    renderStats();
+    renderReminders();
+    renderChips();
+    renderList();
+    renderMode();
+  }
+
+  /* ---------- Add / edit sheet ---------- */
+  function openSheet(c) {
+    editingId = c ? c.id : null;
+    $("#sheet-h").textContent = c ? "Edit client" : "Add client";
+    $("#f-name").value = c ? c.name || "" : "";
+    $("#f-phone").value = c ? c.phone || "" : "";
+    $("#f-job").value = c ? c.job || "" : "";
+    $("#f-address").value = c ? c.address || "" : "";
+    $("#f-amount").value = c && c.amount ? c.amount : "";
+    $("#f-appointment").value = c ? c.appointmentDate || "" : "";
+    $("#f-reminder").value = c ? c.reminder || "" : "";
+    $("#f-quote").checked = !!(c && c.quoteSent);
+    $("#f-started").checked = !!(c && c.started);
+    $("#f-paid").checked = !!(c && c.paid);
+    $("#f-notes").value = c ? c.notes || "" : "";
+    $("#f-err").hidden = true;
+    $("#sheet").hidden = false;
+    setTimeout(function () { $("#f-name").focus(); }, 30);
+  }
+  function closeSheet() { $("#sheet").hidden = true; editingId = null; }
+
+  window.addEventListener("load", function() {
+    var addBtn = $("#add");
+    if (addBtn) { addBtn.onclick = function() { openSheet(null); }; }
+  });
+
+  $("#cancel").addEventListener("click", closeSheet);
+  $("#backdrop").addEventListener("click", closeSheet);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
+
+  $("#form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var name = $("#f-name").value.trim();
+    if (!name) { $("#f-err").hidden = false; $("#f-name").focus(); return; }
+    var prev = editingId ? clients.find(function (x) { return x.id === editingId; }) : null;
+    var amount = parseFloat($("#f-amount").value);
+    var c = Object.assign({}, prev || { createdAt: Date.now() }, {
+      id: prev ? prev.id : newId(),
+      name: name,
+      phone: $("#f-phone").value.trim(),
+      job: $("#f-job").value.trim(),
+      address: $("#f-address").value.trim(),
+      amount: isFinite(amount) && amount > 0 ? amount : 0,
+      appointmentDate: $("#f-appointment").value || "",
+      reminder: $("#f-reminder").value || "",
+      quoteSent: $("#f-quote").checked,
+      started: $("#f-started").checked,
+      paid: $("#f-paid").checked,
+      notes: $("#f-notes").value.trim(),
+      updatedAt: Date.now()
+    });
+    saveRecord(c);
+    closeSheet();
+  });
+
+  $("#search").addEventListener("input", function (e) { query = e.target.value.trim(); renderList(); });
+
+  init();
+</script>
+
+</body>
+</html>
